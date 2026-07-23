@@ -1,0 +1,22 @@
+# Seed target list for lead sourcing.
+# Each entry is one Google Places Text Search: "<business_type> in <location>".
+# Start narrow (WI + neighboring states), expand once the pipeline is trusted.
+
+business_types:
+  - spray foam insulation
+
+locations:
+  - Green Bay WI
+  - Appleton WI
+  - Oshkosh WI
+  - Sturgeon Bay WI
+  - Wausau WI
+  - Eau Claire WI
+  - Madison WI
+  - Milwaukee WI
+  - Duluth MN
+  - Rockford IL
+
+# Vercel/Twilio-style per-city extras are NOT used here on purpose — this pipeline
+# doesn't buy domains or provision phone numbers, it just needs a location string
+# to feed Google Places Text Search.

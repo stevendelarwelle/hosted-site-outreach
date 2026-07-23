@@ -1,0 +1,48 @@
+name: 05 Poll Replies + Follow-up
+
+on:
+  schedule:
+    - cron: '0 */4 * * *'   # every 4 hours
+  workflow_dispatch:
+
+jobs:
+  replies:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - run: pip install -r requirements.txt
+
+      - name: Check secrets
+        run: |
+          [ -n "$ANTHROPIC_API_KEY" ] || { echo "❌ ANTHROPIC_API_KEY missing"; exit 1; }
+          [ -n "$SUPABASE_URL" ] || { echo "❌ SUPABASE_URL missing"; exit 1; }
+          [ -n "$SUPABASE_SERVICE_ROLE_KEY" ] || { echo "❌ SUPABASE_SERVICE_ROLE_KEY missing"; exit 1; }
+          [ -n "$GMAIL_REFRESH_TOKEN" ] || { echo "❌ GMAIL_REFRESH_TOKEN missing"; exit 1; }
+          [ -n "$GH_TOKEN" ] || { echo "❌ GH_TOKEN missing"; exit 1; }
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GMAIL_REFRESH_TOKEN: ${{ secrets.GMAIL_REFRESH_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN_SITES }}
+
+      - name: Poll replies / follow-up / expire
+        run: python -m src.replies
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
+          GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
+          GMAIL_REFRESH_TOKEN: ${{ secrets.GMAIL_REFRESH_TOKEN }}
+          GMAIL_SENDER: ${{ secrets.GMAIL_SENDER }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN_SITES }}
+          PUBLISH_REPO_OWNER: stevendelarwelle
+          PUBLISH_REPO_NAME: vet-demo-sites
+          DRY_RUN: ${{ vars.DRY_RUN }}

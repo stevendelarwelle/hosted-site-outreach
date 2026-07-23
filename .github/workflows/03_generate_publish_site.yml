@@ -1,0 +1,46 @@
+name: 03 Generate + Publish Site
+
+# Only acts on leads with status=qualified AND approved_for_site=true —
+# flip that flag in Supabase (outreach.leads) after reviewing qualify
+# results/screenshots. Nothing runs against a lead until a human approves it.
+
+on:
+  schedule:
+    - cron: '0 10 * * *'   # nightly, 10am UTC — after 02 runs
+  workflow_dispatch:
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30   # Claude Opus generation takes time
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - run: pip install -r requirements.txt
+
+      - name: Check secrets
+        run: |
+          [ -n "$ANTHROPIC_API_KEY" ] || { echo "❌ ANTHROPIC_API_KEY missing"; exit 1; }
+          [ -n "$SUPABASE_URL" ] || { echo "❌ SUPABASE_URL missing"; exit 1; }
+          [ -n "$SUPABASE_SERVICE_ROLE_KEY" ] || { echo "❌ SUPABASE_SERVICE_ROLE_KEY missing"; exit 1; }
+          [ -n "$GH_TOKEN" ] || { echo "❌ GH_TOKEN missing"; exit 1; }
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN_SITES }}
+
+      - name: Generate + publish sites
+        run: python -m src.site_generator
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN_SITES }}
+          PUBLISH_REPO_OWNER: stevendelarwelle
+          PUBLISH_REPO_NAME: vet-demo-sites
+          DRY_RUN: ${{ vars.DRY_RUN }}
