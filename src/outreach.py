@@ -49,7 +49,11 @@ def find_lead_email(lead: dict) -> str | None:
 
 
 def main():
-    dry_run = os.environ.get("DRY_RUN", "false").lower() == "true"
+    # Safe-by-default: dry-run unless DRY_RUN is explicitly "false". This
+    # matters because ${{ vars.DRY_RUN }} resolves to an EMPTY string (not
+    # absent) if the repo variable was never created — an "== 'true'" check
+    # would silently default to live-sending in that case.
+    dry_run = os.environ.get("DRY_RUN", "true").lower() != "false"
     batch_size = int(os.environ.get("OUTREACH_BATCH_SIZE", "10"))
 
     leads = db.get_leads("site_generated", limit=batch_size, approved_for_outreach=True)

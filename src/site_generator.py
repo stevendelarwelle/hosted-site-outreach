@@ -79,7 +79,8 @@ def main():
 
     from src import db, publisher
 
-    dry_run = os.environ.get("DRY_RUN", "false").lower() == "true"
+    # Safe-by-default — see outreach.py for why this isn't "== 'true'".
+    dry_run = os.environ.get("DRY_RUN", "true").lower() != "false"
     batch_size = int(os.environ.get("SITE_GEN_BATCH_SIZE", "10"))
 
     leads = db.get_leads("qualified", limit=batch_size, approved_for_site=True)

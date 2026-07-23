@@ -70,9 +70,9 @@ spends Opus tokens on a lead nobody's reviewed.
 
 ### 2. GitHub Variables (same page, "Variables" tab)
 
-| Variable | Default | Notes |
-|---|---|---|
-| `DRY_RUN` | `true` | While `true`: 03 logs what it would publish without committing, 04 logs the drafted email without sending, 05 logs follow-up/expire actions without sending or deleting. **Keep this `true` until you've watched a manual dry run of the full pipeline and are comfortable with the output.** Flip to `false` only when ready to actually publish sites / send email. |
+| Variable | Notes |
+|---|---|
+| `DRY_RUN` | **Safe by default** — 03/04/05 run in dry-run mode (log what they'd do, no publish/send/delete) unless this variable exists AND is set to exactly `false`. You don't need to create it to start safely; you only need to create it, set to `false`, once you're ready to go live. |
 
 ### 3. Gmail OAuth (one-time, manual — required before 04/05 can run)
 

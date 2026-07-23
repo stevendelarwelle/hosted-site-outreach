@@ -141,7 +141,8 @@ def process_lead(lead: dict, now: datetime, dry_run: bool) -> None:
 
 
 def main():
-    dry_run = os.environ.get("DRY_RUN", "false").lower() == "true"
+    # Safe-by-default — see outreach.py for why this isn't "== 'true'".
+    dry_run = os.environ.get("DRY_RUN", "true").lower() != "false"
     now = datetime.now(timezone.utc)
 
     leads = db.get_leads("emailed", limit=50) + db.get_leads("followed_up", limit=50)
