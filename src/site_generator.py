@@ -63,12 +63,27 @@ def generate_site_html(lead: dict) -> str:
 
     message = client.messages.create(
         model=MODEL,
-        max_tokens=8000,
+        max_tokens=20000,
         messages=[{"role": "user", "content": prompt}],
     )
+
+    if message.stop_reason == "max_tokens":
+        # 8000 was silently truncating real output mid-document (cut off
+        # inside the trust-bar section, no </html>, no contact section at
+        # all — nothing to do with model quality). Treat truncation as a
+        # hard failure rather than publishing a broken page.
+        raise RuntimeError(
+            f"Claude response hit the {20000}-token cap before finishing — "
+            "the generated HTML is incomplete, refusing to publish it."
+        )
+
     block = next((b for b in message.content if b.type == "text"), None)
     html = block.text.strip() if block else ""
     html = html.removeprefix("```html").removeprefix("```").removesuffix("```").strip()
+
+    if "</html>" not in html.lower():
+        raise RuntimeError("Generated HTML has no closing </html> tag — refusing to publish incomplete page.")
+
     return html
 
 
