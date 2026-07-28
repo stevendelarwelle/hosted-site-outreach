@@ -118,6 +118,7 @@ def main():
             total += len(rows)
             print(f"  +{len(rows)} new lead(s)")
 
+    db.commit_and_push(f"source: {total} new lead(s)")
     print(f"\nDone. {total} new lead(s) sourced this run.")
 
 

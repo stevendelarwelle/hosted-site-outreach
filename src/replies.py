@@ -104,6 +104,9 @@ def send_followup(lead: dict, dry_run: bool) -> None:
         "status": "followed_up",
         "followup_sent_at": datetime.now(timezone.utc).isoformat(),
     })
+    # Per-send commit, same reasoning as outreach.py — don't risk a
+    # duplicate nudge if the process dies before the end-of-run commit.
+    db.commit_and_push(f"replies: sent follow-up to {lead['name']} ({lead['place_id']})")
     print(f"    -> nudge sent, message {sent['message_id']}")
 
 
@@ -155,6 +158,7 @@ def main():
         except Exception as e:
             print(f"    [ERROR] {e}")
 
+    db.commit_and_push(f"replies: {len(leads)} lead(s) checked")
     print("Done.")
 
 

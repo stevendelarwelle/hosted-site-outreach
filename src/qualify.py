@@ -5,8 +5,9 @@ For leads with no website on file: auto-qualify, zero cost.
 For leads whose site doesn't load at all: auto-qualify as worth_pursuing
   (a broken site is the best possible target) — no screenshot/Claude call.
 For leads with a reachable site: Playwright screenshots (desktop + mobile)
-  uploaded to Supabase Storage, then a single Claude vision call scores
-  modernity/mobile/cta and returns worth_pursuing.
+  written to screenshots/{place_id}/ and committed to the repo (so gate-1
+  review can see them straight from GitHub), then a single Claude vision
+  call scores modernity/mobile/cta and returns worth_pursuing.
 
 LOW overall_score = bad existing site = worth pursuing. This is the inverse
 of lead-gen-pipeline's scanner.py opportunity scoring, where high = better.
@@ -31,6 +32,8 @@ MODEL = "claude-opus-4-6"  # vision call — use the strongest model, low volume
 SCORE_THRESHOLD = 5  # overall_score <= this advances the lead
 BATCH_SIZE = 20
 
+SCREENSHOTS_DIR = Path(__file__).parent.parent / "screenshots"
+
 client = anthropic.Anthropic()
 
 
@@ -52,13 +55,15 @@ def screenshot_pair(url: str, place_id: str) -> tuple[bytes, bytes]:
     return desktop_png, mobile_png
 
 
-def upload_screenshot(png_bytes: bytes, place_id: str, label: str) -> str:
-    sb = db.get_client()
-    path = f"{place_id}/{label}.png"
-    sb.storage.from_("outreach-screenshots").upload(
-        path, png_bytes, {"content-type": "image/png", "upsert": "true"}
-    )
-    return sb.storage.from_("outreach-screenshots").get_public_url(path)
+def save_screenshot(png_bytes: bytes, place_id: str, label: str) -> str:
+    """Writes to screenshots/{place_id}/{label}.png, returns the repo-relative
+    path (stored in the CSV, committed alongside it so gate-1 review can open
+    it straight from GitHub)."""
+    lead_dir = SCREENSHOTS_DIR / place_id
+    lead_dir.mkdir(parents=True, exist_ok=True)
+    file_path = lead_dir / f"{label}.png"
+    file_path.write_bytes(png_bytes)
+    return str(file_path.relative_to(SCREENSHOTS_DIR.parent))
 
 
 def score_with_claude(lead: dict, desktop_png: bytes, mobile_png: bytes) -> dict:
@@ -119,8 +124,8 @@ def qualify_lead(lead: dict) -> None:
         })
         return
 
-    desktop_url = upload_screenshot(desktop_png, place_id, "desktop")
-    mobile_url = upload_screenshot(mobile_png, place_id, "mobile")
+    desktop_path = save_screenshot(desktop_png, place_id, "desktop")
+    mobile_path = save_screenshot(mobile_png, place_id, "mobile")
 
     result = score_with_claude(lead, desktop_png, mobile_png)
     overall = result.get("overall_score", 5)
@@ -131,8 +136,8 @@ def qualify_lead(lead: dict) -> None:
         "qualify_score": overall,
         "qualify_worth_pursuing": worth_pursuing,
         "qualify_notes": result.get("notes", ""),
-        "screenshot_desktop_url": desktop_url,
-        "screenshot_mobile_url": mobile_url,
+        "screenshot_desktop_path": desktop_path,
+        "screenshot_mobile_path": mobile_path,
         "contact_email": fetched.get("email"),
     })
 
@@ -148,6 +153,11 @@ def main():
             db.update_lead(lead["place_id"], {"status": "new", "error": str(e)})
             print(f"    [ERROR] {e}")
         time.sleep(1)
+
+    db.commit_and_push(
+        f"qualify: {len(leads)} lead(s) processed",
+        extra_paths=[str(SCREENSHOTS_DIR)],
+    )
     print("Done.")
 
 

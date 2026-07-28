@@ -1,14 +1,22 @@
 name: 04 Send Outreach
 
 # Only acts on leads with status=site_generated AND approved_for_outreach=true
-# — flip that flag in Supabase after reviewing the live preview URL. This is
-# the workflow that emails a real stranger; keep DRY_RUN=true (repo variable)
-# until you've watched a few dry runs and trust the drafts.
+# — flip that column to TRUE in data/leads.csv after reviewing the live
+# preview URL. This is the workflow that emails a real stranger; leave
+# DRY_RUN unset (safe by default) until you've watched a few dry runs and
+# trust the drafts — see README.
 
 on:
   schedule:
     - cron: '0 14 * * 1-5'   # weekdays, 9am CT / 14:00 UTC
   workflow_dispatch:
+
+permissions:
+  contents: write   # the script commits data/leads.csv itself, after every send
+
+concurrency:
+  group: leads-csv
+  cancel-in-progress: false   # queue instead of racing on data/leads.csv
 
 jobs:
   outreach:
@@ -23,24 +31,23 @@ jobs:
 
       - run: pip install -r requirements.txt
 
+      - name: Configure git identity
+        run: |
+          git config user.name "hosted-site-outreach[bot]"
+          git config user.email "bot@hosted-site-outreach"
+
       - name: Check secrets
         run: |
           [ -n "$ANTHROPIC_API_KEY" ] || { echo "❌ ANTHROPIC_API_KEY missing"; exit 1; }
-          [ -n "$SUPABASE_URL" ] || { echo "❌ SUPABASE_URL missing"; exit 1; }
-          [ -n "$SUPABASE_SERVICE_ROLE_KEY" ] || { echo "❌ SUPABASE_SERVICE_ROLE_KEY missing"; exit 1; }
           [ -n "$GMAIL_REFRESH_TOKEN" ] || { echo "❌ GMAIL_REFRESH_TOKEN missing"; exit 1; }
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           GMAIL_REFRESH_TOKEN: ${{ secrets.GMAIL_REFRESH_TOKEN }}
 
       - name: Send outreach
         run: python -m src.outreach
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
           GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
           GMAIL_REFRESH_TOKEN: ${{ secrets.GMAIL_REFRESH_TOKEN }}

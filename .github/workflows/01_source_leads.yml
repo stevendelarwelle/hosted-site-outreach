@@ -5,6 +5,13 @@ on:
     - cron: '0 8 * * 1'   # weekly, Monday 8am UTC
   workflow_dispatch:
 
+permissions:
+  contents: write   # the script commits data/leads.csv itself
+
+concurrency:
+  group: leads-csv
+  cancel-in-progress: false   # queue instead of racing on data/leads.csv
+
 jobs:
   source:
     runs-on: ubuntu-latest
@@ -18,19 +25,18 @@ jobs:
 
       - run: pip install -r requirements.txt
 
+      - name: Configure git identity
+        run: |
+          git config user.name "hosted-site-outreach[bot]"
+          git config user.email "bot@hosted-site-outreach"
+
       - name: Check secrets
         run: |
           [ -n "$GOOGLE_API_KEY" ] || { echo "❌ GOOGLE_API_KEY missing"; exit 1; }
-          [ -n "$SUPABASE_URL" ] || { echo "❌ SUPABASE_URL missing"; exit 1; }
-          [ -n "$SUPABASE_SERVICE_ROLE_KEY" ] || { echo "❌ SUPABASE_SERVICE_ROLE_KEY missing"; exit 1; }
         env:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
 
       - name: Source leads
         run: python -m src.places
         env:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}

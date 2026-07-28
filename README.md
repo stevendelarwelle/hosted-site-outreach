@@ -14,16 +14,18 @@ name/phone/address/reviews, and a mockup hosted as a static page.
 
 ```
 01_source_leads        (weekly)   Google Places Text Search per config/targets.yml
-                                   -> upserts into Supabase outreach.leads (status=new)
+                                   -> upserts into data/leads.csv (status=new)
 
 02_qualify_screenshot   (nightly)  No website -> auto-qualify.
                                    Site unreachable -> auto-qualify (broken site = best target).
-                                   Site loads -> Playwright screenshots (desktop+mobile)
+                                   Site loads -> Playwright screenshots (desktop+mobile,
+                                   saved to screenshots/{place_id}/)
                                    + Claude vision scoring -> status=qualified/disqualified.
                                    Also best-effort scrapes a contact email off the site.
 
-   <<< GATE 1 — human: review qualify_score/notes/screenshots in Supabase,
-       flip approved_for_site=true on leads worth generating a mockup for >>>
+   <<< GATE 1 — human: review qualify_score/notes/screenshots in data/leads.csv
+       (edit in GitHub's web UI, or clone/pull), flip approved_for_site to TRUE
+       on leads worth generating a mockup for >>>
 
 03_generate_publish_site (nightly) Claude generates ONE self-contained landing
                                    page grounded in the lead's real Places data
@@ -34,8 +36,8 @@ name/phone/address/reviews, and a mockup hosted as a static page.
                                    -> live instantly via GitHub Pages.
                                    status=site_generated
 
-   <<< GATE 2 — human: open the live preview URL, flip
-       approved_for_outreach=true if it's good enough to send >>>
+   <<< GATE 2 — human: open the live preview URL, flip approved_for_outreach
+       to TRUE in data/leads.csv if it's good enough to send >>>
 
 04_send_outreach        (weekdays) Claude drafts a short personal email,
                                    sent via Gmail API (real inbox, threaded).
@@ -62,11 +64,15 @@ spends Opus tokens on a lead nobody's reviewed.
 |---|---|---|
 | `GOOGLE_API_KEY` | 01 | Places API — can reuse Card-Shout's key |
 | `ANTHROPIC_API_KEY` | 02, 03, 04, 05 | |
-| `SUPABASE_URL` | all | Card-Shout's Supabase project (`US Address Database`) — `https://mijynfwlftqyloykvsco.supabase.co` |
-| `SUPABASE_SERVICE_ROLE_KEY` | all | **service_role**, not anon/publishable — this pipeline needs to bypass RLS. Get it from Supabase → Project Settings → API. |
 | `GH_TOKEN_SITES` | 03, 05 | Fine-grained PAT with **Contents: read/write** on `stevendelarwelle/vet-demo-sites` specifically |
 | `GMAIL_CLIENT_ID` / `GMAIL_CLIENT_SECRET` / `GMAIL_REFRESH_TOKEN` | 04, 05 | See Gmail OAuth setup below |
 | `GMAIL_SENDER` | 04, 05 | The Gmail address sending/receiving outreach, e.g. `stevendelarwelle@gmail.com` |
+
+No database credentials needed — `data/leads.csv` is the database, committed
+to this repo by each workflow (`permissions: contents: write` is already set
+in every workflow file for this). All five workflows share a
+`concurrency: group: leads-csv` so overlapping runs queue instead of racing
+on the same file.
 
 ### 2. GitHub Variables (same page, "Variables" tab)
 
@@ -87,30 +93,40 @@ spends Opus tokens on a lead nobody's reviewed.
    that becomes `GMAIL_REFRESH_TOKEN`. This step has to be done by a human
    with browser access; it can't run inside GitHub Actions.
 
-### 4. Supabase
+### 4. Data — `data/leads.csv`
 
-The `outreach` schema and `outreach.leads` table already exist in the same
-Supabase project Card-Shout uses (kept in its own schema — this never touches
-`public.addresses`). A public storage bucket `outreach-screenshots` holds the
-qualify-step screenshots for gate-1 review. Nothing else to provision.
+The whole pipeline's state. Each workflow reads it, does its work, and
+commits+pushes it back (`src/db.py`'s `commit_and_push()` — 04's outreach
+send and 05's follow-up-nudge commit after *every* send specifically, not
+just once at the end of the run, so a mid-batch crash can't cause a
+duplicate email; everything else commits once per run since re-processing a
+lead there is harmless). Screenshots from the qualify step live in
+`screenshots/{place_id}/desktop.png` and `.../mobile.png`, committed
+alongside the CSV so gate-1 review works straight from GitHub's file browser
+— no external dependency, nothing else to provision.
+
+The two human approval gates are just cells in this CSV: open
+`data/leads.csv` in GitHub's web editor (or `git pull`, edit locally, push),
+set `approved_for_site` / `approved_for_outreach` to `True` for the rows
+you've reviewed and want to advance.
 
 ### First run (do this before enabling any cron)
 
-1. Add the secrets above, leave `DRY_RUN=true`.
-2. `workflow_dispatch` → **01 Source Leads** manually — check `outreach.leads`
-   in Supabase for new rows.
+1. Add the secrets above, leave `DRY_RUN` unset (safe by default).
+2. `workflow_dispatch` → **01 Source Leads** manually — check
+   `data/leads.csv` for new rows after it runs.
 3. `workflow_dispatch` → **02 Qualify + Screenshot** — check `qualify_score`,
-   `qualify_notes`, and the screenshot URLs for a handful of leads. Tune
-   `prompts/qualify_prompt.md` if the scoring doesn't match your own judgment
-   on ~15-20 known sites before trusting it further.
-4. Manually flip `approved_for_site=true` on 2-3 leads in Supabase.
-5. `workflow_dispatch` → **03 Generate + Publish Site** with `DRY_RUN=true`
-   first, read the logged HTML output. When happy, flip `DRY_RUN=false` for
-   one real run and open the live preview URL(s).
-6. Manually fill `contact_email` for any lead where the qualify step didn't
-   find one, and flip `approved_for_outreach=true`.
-7. `workflow_dispatch` → **04 Send Outreach** with `DRY_RUN=true`, read the
-   drafted email. When ready, flip `DRY_RUN=false` and send a small first
+   `qualify_notes`, and the screenshots under `screenshots/` for a handful of
+   leads. Tune `prompts/qualify_prompt.md` if the scoring doesn't match your
+   own judgment on ~15-20 known sites before trusting it further.
+4. Manually set `approved_for_site` to `True` on 2-3 rows in `data/leads.csv`.
+5. `workflow_dispatch` → **03 Generate + Publish Site** with `DRY_RUN` unset
+   first, read the logged HTML output. When happy, set the `DRY_RUN` repo
+   variable to `false` for one real run and open the live preview URL(s).
+6. Manually fill `contact_email` for any row where the qualify step didn't
+   find one, and set `approved_for_outreach` to `True`.
+7. `workflow_dispatch` → **04 Send Outreach** with `DRY_RUN` unset, read the
+   drafted email. When ready, set `DRY_RUN=false` and send a small first
    batch (~5 leads) — not the full cron.
 8. Watch **05 Poll Replies + Follow-up** across a full 7-day cycle for that
    batch before enabling the schedules on 03/04/05 for real.

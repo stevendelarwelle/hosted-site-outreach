@@ -3,6 +3,13 @@ Drafts and sends the cold outreach email for site_generated leads that have
 cleared the second human approval gate (approved_for_outreach). Gated behind
 DRY_RUN — with DRY_RUN=true this drafts and logs the email but never calls
 the Gmail API.
+
+Unlike the other pipeline scripts, this one commits+pushes data/leads.csv
+after EVERY successful send, not once at the end of the batch. A crash after
+Gmail confirms a send but before that status lands in git would otherwise
+mean the next run has no record the email went out — and would send it
+again. Committing per-send bounds that risk to "at most one in-flight send"
+instead of the whole batch.
 """
 
 import os
@@ -84,6 +91,7 @@ def main():
                 "email_sent_at": now.isoformat(),
                 "expire_at": (now + timedelta(days=EXPIRE_DAYS)).isoformat(),
             })
+            db.commit_and_push(f"outreach: emailed {lead['name']} ({lead['place_id']})")
             print(f"    -> sent, thread {sent['thread_id']}")
         except Exception as e:
             db.update_lead(lead["place_id"], {"error": str(e)})

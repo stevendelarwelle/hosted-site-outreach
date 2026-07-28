@@ -112,6 +112,7 @@ def main():
             print(f"    [ERROR] {e}")
         time.sleep(1)
 
+    db.commit_and_push(f"site-gen: {len(leads)} site(s) processed")
     print("Done.")
 
 
