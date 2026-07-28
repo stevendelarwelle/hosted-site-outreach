@@ -68,8 +68,7 @@ looked at the live preview URL and approved it.
 | `GOOGLE_API_KEY` | 01 | Places API — can reuse Card-Shout's key |
 | `ANTHROPIC_API_KEY` | 02, 03, 04, 05 | |
 | `GH_TOKEN_SITES` | 03, 05 | Fine-grained PAT with **Contents: read/write** on `stevendelarwelle/vet-demo-sites` specifically |
-| `GMAIL_CLIENT_ID` / `GMAIL_CLIENT_SECRET` / `GMAIL_REFRESH_TOKEN` | 04, 05 | See Gmail OAuth setup below |
-| `GMAIL_SENDER` | 04, 05 | The Gmail address sending/receiving outreach, e.g. `stevendelarwelle@gmail.com` |
+| `GMAIL_CLIENT_ID` / `GMAIL_CLIENT_SECRET` / `GMAIL_REFRESH_TOKEN` | 04, 05 | See Gmail OAuth setup below. The sending/receiving address itself is read from the authenticated account via the Gmail API (`users.getProfile`) — not a separate secret, so it can never drift out of sync with what the refresh token actually authenticates as. |
 
 No database credentials needed — `data/leads.csv` is the database, committed
 to this repo by each workflow (`permissions: contents: write` is already set
