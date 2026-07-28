@@ -16,16 +16,19 @@ name/phone/address/reviews, and a mockup hosted as a static page.
 01_source_leads        (weekly)   Google Places Text Search per config/targets.yml
                                    -> upserts into data/leads.csv (status=new)
 
-02_qualify_screenshot   (nightly)  No website -> auto-qualify.
-                                   Site unreachable -> auto-qualify (broken site = best target).
+02_qualify_screenshot   (nightly)  No website -> score=1 (best possible target).
+                                   Site unreachable -> score=1 (broken site = best target).
                                    Site loads -> Playwright screenshots (desktop+mobile,
-                                   saved to screenshots/{place_id}/)
-                                   + Claude vision scoring -> status=qualified/disqualified.
+                                   saved to screenshots/{place_id}/) + Claude vision
+                                   scoring -> a real 1-10 score (low = bad site).
                                    Also best-effort scrapes a contact email off the site.
 
-   <<< GATE 1 — human: review qualify_score/notes/screenshots in data/leads.csv
-       (edit in GitHub's web UI, or clone/pull), flip approved_for_site to TRUE
-       on leads worth generating a mockup for >>>
+   Gate 1 is fully automatic now: a lead auto-advances to
+   status=qualified + approved_for_site=TRUE iff qualify_score <= 5 AND a
+   contact_email was found; otherwise status=disqualified. No human review
+   step here anymore — see "Known gap" below for what this means for
+   no-website/unreachable-site leads specifically, since those can only ever
+   get an auto-discovered email if 03 found one on a page that never loaded.
 
 03_generate_publish_site (nightly) Claude generates ONE self-contained landing
                                    page grounded in the lead's real Places data
@@ -52,9 +55,9 @@ name/phone/address/reviews, and a mockup hosted as a static page.
                                    file removed from vet-demo-sites.
 ```
 
-Everything downstream of the two human gates can run unattended once you
-trust it. Nothing before either gate touches a real business's inbox or
-spends Opus tokens on a lead nobody's reviewed.
+Gate 1 (qualify -> site-gen) is automatic; gate 2 (site-gen -> outreach) is
+still a human review step — nothing emails a real business until you've
+looked at the live preview URL and approved it.
 
 ## Setup
 
@@ -103,13 +106,12 @@ just once at the end of the run, so a mid-batch crash can't cause a
 duplicate email; everything else commits once per run since re-processing a
 lead there is harmless). Screenshots from the qualify step live in
 `screenshots/{place_id}/desktop.png` and `.../mobile.png`, committed
-alongside the CSV so gate-1 review works straight from GitHub's file browser
-— no external dependency, nothing else to provision.
+alongside the CSV — no external dependency, nothing else to provision.
 
-The two human approval gates are just cells in this CSV: open
-`data/leads.csv` in GitHub's web editor (or `git pull`, edit locally, push),
-set `approved_for_site` / `approved_for_outreach` to `True` for the rows
-you've reviewed and want to advance.
+Gate 2 (site-gen -> outreach) is the one remaining human approval — a cell
+in this CSV: open `data/leads.csv` in GitHub's web editor (or `git pull`,
+edit locally, push), set `approved_for_outreach` to `True` for rows whose
+preview URL you've checked and want to actually email.
 
 ### First run (do this before enabling any cron)
 
@@ -118,30 +120,38 @@ you've reviewed and want to advance.
    `data/leads.csv` for new rows after it runs.
 3. `workflow_dispatch` → **02 Qualify + Screenshot** — check `qualify_score`,
    `qualify_notes`, and the screenshots under `screenshots/` for a handful of
-   leads. Tune `prompts/qualify_prompt.md` if the scoring doesn't match your
-   own judgment on ~15-20 known sites before trusting it further.
-4. Manually set `approved_for_site` to `True` on 2-3 rows in `data/leads.csv`.
-5. `workflow_dispatch` → **03 Generate + Publish Site** with `DRY_RUN` unset
+   leads, and confirm `status`/`approved_for_site` landed where you'd expect
+   given the auto-approval rule (score <= 5 and a contact_email present).
+   Tune `prompts/qualify_prompt.md` if the scoring doesn't match your own
+   judgment on ~15-20 known sites before trusting it further — this step now
+   drives site-gen with no human checkpoint in between, so it's worth getting
+   right before turning on 03's cron.
+4. `workflow_dispatch` → **03 Generate + Publish Site** with `DRY_RUN` unset
    first, read the logged HTML output. When happy, set the `DRY_RUN` repo
    variable to `false` for one real run and open the live preview URL(s).
-6. Manually fill `contact_email` for any row where the qualify step didn't
-   find one, and set `approved_for_outreach` to `True`.
-7. `workflow_dispatch` → **04 Send Outreach** with `DRY_RUN` unset, read the
+5. Set `approved_for_outreach` to `True` in `data/leads.csv` for the rows
+   whose preview you've reviewed and are happy with.
+6. `workflow_dispatch` → **04 Send Outreach** with `DRY_RUN` unset, read the
    drafted email. When ready, set `DRY_RUN=false` and send a small first
    batch (~5 leads) — not the full cron.
-8. Watch **05 Poll Replies + Follow-up** across a full 7-day cycle for that
+7. Watch **05 Poll Replies + Follow-up** across a full 7-day cycle for that
    batch before enabling the schedules on 03/04/05 for real.
-9. Only once all of the above has been exercised successfully, remove the
+8. Only once all of the above has been exercised successfully, remove the
    `workflow_dispatch`-only caution and let the cron schedules run unattended.
 
 ## Known gap: Google Places has no email field
 
 Places API returns phone/website/rating, never a business email. `02` makes
 a best-effort attempt to scrape one off the lead's existing site (mailto:
-links first, then a generic email regex) and stores it as `contact_email`.
-Leads with no website, or a site with no discoverable email, need
-`contact_email` filled in by hand during gate 1/2 review — `04` skips any
-lead with no `contact_email` rather than guessing one.
+links first, then a generic email regex) and stores it as `contact_email` —
+this is now load-bearing, not just a nice-to-have: since gate 1 requires a
+`contact_email` to auto-approve, leads with no website or an unreachable
+site (structurally unable to yield a scraped email — there's no page to pull
+one from) will auto-disqualify by default even though they're otherwise the
+best possible targets. If you want to rescue those, backfill `contact_email`
+by hand in `data/leads.csv` and reset `status` back to `new` so `02`
+re-evaluates them — flipping `approved_for_site` directly also works if you
+don't want it re-scored.
 
 ## Booking (step 8, not yet wired up)
 

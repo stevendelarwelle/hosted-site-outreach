@@ -1,16 +1,26 @@
 """
 The "crappy website" filter — highest-leverage step in the pipeline.
 
-For leads with no website on file: auto-qualify, zero cost.
-For leads whose site doesn't load at all: auto-qualify as worth_pursuing
-  (a broken site is the best possible target) — no screenshot/Claude call.
+For leads with no website on file: score=1 (best possible target), zero cost.
+For leads whose site doesn't load at all: score=1 (a broken site is the best
+  possible target) — no screenshot/Claude call.
 For leads with a reachable site: Playwright screenshots (desktop + mobile)
-  written to screenshots/{place_id}/ and committed to the repo (so gate-1
-  review can see them straight from GitHub), then a single Claude vision
-  call scores modernity/mobile/cta and returns worth_pursuing.
+  written to screenshots/{place_id}/ and committed to the repo, then a single
+  Claude vision call scores modernity/mobile/cta and returns a real score.
 
 LOW overall_score = bad existing site = worth pursuing. This is the inverse
 of lead-gen-pipeline's scanner.py opportunity scoring, where high = better.
+
+Gate 1 is now fully automatic (no human review step): a lead is marked
+status=qualified + approved_for_site=True iff score <= SCORE_THRESHOLD AND a
+contact_email was found; otherwise status=disqualified. Note the practical
+effect: leads with no website or an unreachable site — otherwise the best
+targets — can only get a contact_email if the qualify_prompt scoring path
+never even ran for them, so they have no scraped page to pull an email from.
+Those leads auto-disqualify for lack of a reachable inbox unless a human
+backfills contact_email by hand before this step next runs on them (editing
+data/leads.csv doesn't un-disqualify a lead automatically — re-set status to
+"new" too if you want it re-evaluated).
 """
 
 import base64
@@ -98,30 +108,47 @@ def score_with_claude(lead: dict, desktop_png: bytes, mobile_png: bytes) -> dict
         return {"overall_score": 5, "worth_pursuing": False, "notes": "Claude response unparseable"}
 
 
+def finalize(place_id: str, *, score: int, worth_pursuing: bool, notes: str,
+             contact_email: str | None, **extra_fields) -> None:
+    """Single decision point for gate 1, applied identically regardless of
+    which path in qualify_lead() got here: auto-approve iff the site is bad
+    enough (score <= SCORE_THRESHOLD) AND we have a real way to reach them
+    (contact_email). Otherwise disqualify outright — no human review step."""
+    auto_approved = score is not None and score <= SCORE_THRESHOLD and bool(contact_email)
+
+    db.update_lead(place_id, {
+        "status": "qualified" if auto_approved else "disqualified",
+        "qualify_score": score,
+        "qualify_worth_pursuing": worth_pursuing,
+        "qualify_notes": notes,
+        "contact_email": contact_email,
+        "approved_for_site": auto_approved,
+        **extra_fields,
+    })
+
+
 def qualify_lead(lead: dict) -> None:
     place_id = lead["place_id"]
     website = lead.get("website") or ""
 
     if not website:
-        db.update_lead(place_id, {"status": "qualified", "qualify_worth_pursuing": True,
-                                   "qualify_notes": "no website on file"})
+        finalize(place_id, score=1, worth_pursuing=True,
+                  notes="no website on file", contact_email=None)
         return
 
     fetched = fetch_existing_site(website)
     if not fetched["reachable"]:
-        db.update_lead(place_id, {
-            "status": "qualified", "qualify_score": 1, "qualify_worth_pursuing": True,
-            "qualify_notes": f"site unreachable: {fetched['error']}",
-        })
+        finalize(place_id, score=1, worth_pursuing=True,
+                  notes=f"site unreachable: {fetched['error']}",
+                  contact_email=fetched.get("email"))
         return
 
     try:
         desktop_png, mobile_png = screenshot_pair(website, place_id)
     except Exception as e:
-        db.update_lead(place_id, {
-            "status": "qualified", "qualify_score": 1, "qualify_worth_pursuing": True,
-            "qualify_notes": f"screenshot failed (treated as broken site): {e}",
-        })
+        finalize(place_id, score=1, worth_pursuing=True,
+                  notes=f"screenshot failed (treated as broken site): {e}",
+                  contact_email=fetched.get("email"))
         return
 
     desktop_path = save_screenshot(desktop_png, place_id, "desktop")
@@ -129,17 +156,13 @@ def qualify_lead(lead: dict) -> None:
 
     result = score_with_claude(lead, desktop_png, mobile_png)
     overall = result.get("overall_score", 5)
-    worth_pursuing = bool(result.get("worth_pursuing")) and overall <= SCORE_THRESHOLD
+    claude_worth_pursuing = bool(result.get("worth_pursuing"))
 
-    db.update_lead(place_id, {
-        "status": "qualified" if worth_pursuing else "disqualified",
-        "qualify_score": overall,
-        "qualify_worth_pursuing": worth_pursuing,
-        "qualify_notes": result.get("notes", ""),
-        "screenshot_desktop_path": desktop_path,
-        "screenshot_mobile_path": mobile_path,
-        "contact_email": fetched.get("email"),
-    })
+    finalize(
+        place_id, score=overall, worth_pursuing=claude_worth_pursuing,
+        notes=result.get("notes", ""), contact_email=fetched.get("email"),
+        screenshot_desktop_path=desktop_path, screenshot_mobile_path=mobile_path,
+    )
 
 
 def main():
