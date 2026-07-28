@@ -79,6 +79,7 @@ on the same file.
 | Variable | Notes |
 |---|---|
 | `DRY_RUN` | **Safe by default** — 03/04/05 run in dry-run mode (log what they'd do, no publish/send/delete) unless this variable exists AND is set to exactly `false`. You don't need to create it to start safely; you only need to create it, set to `false`, once you're ready to go live. |
+| `SITES_TO_CREATE_PER_RUN` | How many `qualified` + `approved_for_site` leads **03** generates a mockup for per run. Defaults to `10` if unset. |
 
 ### 3. Gmail OAuth (one-time, manual — required before 04/05 can run)
 

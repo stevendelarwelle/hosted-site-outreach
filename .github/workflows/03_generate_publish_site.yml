@@ -50,3 +50,4 @@ jobs:
           PUBLISH_REPO_OWNER: stevendelarwelle
           PUBLISH_REPO_NAME: vet-demo-sites
           DRY_RUN: ${{ vars.DRY_RUN }}
+          SITES_TO_CREATE_PER_RUN: ${{ vars.SITES_TO_CREATE_PER_RUN }}
