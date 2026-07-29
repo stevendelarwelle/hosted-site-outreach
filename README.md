@@ -48,25 +48,36 @@ name/phone/address/reviews, and a mockup hosted as a static page.
                                    contact_email on file. You review it in
                                    Gmail and hit send yourself.
 
-05_poll_replies_followup (4hrly)  Two things: (a) checks draft_created leads
-                                   for whether you've actually sent the draft
-                                   yet — once you have, status=emailed and the
-                                   7-day clock starts from the real send time,
-                                   not when it was drafted; (b) for
-                                   emailed/followed_up leads, polls the Gmail
-                                   thread — reply arrives -> Claude classifies
-                                   interested/not/needs_info, status=replied_*.
-                                   No reply by day 3 -> one automated nudge
-                                   (status=followed_up). No reply by day 7 ->
-                                   status=expired, mockup file removed from
-                                   vet-demo-sites.
+05_poll_replies_followup (4hrly)  Four things, every pass: (a) checks
+                                   draft_created leads for whether you've
+                                   sent the initial draft yet — once you
+                                   have, status=emailed and the 7-day clock
+                                   starts from the real send time, not when
+                                   it was drafted; (b) same idea for
+                                   followup_draft_created leads (the day-3
+                                   nudge, see below) -> status=followed_up
+                                   once you've sent that one too; (c) for
+                                   emailed/followup_draft_created/followed_up
+                                   leads, polls the Gmail thread — reply
+                                   arrives -> Claude classifies
+                                   interested/not/needs_info, status=replied_*;
+                                   (d) timer check off the ORIGINAL send time:
+                                   day 3+ with status still emailed -> drafts
+                                   (does not send) a nudge, status=
+                                   followup_draft_created — review and send
+                                   it yourself, same as the initial email.
+                                   Day 7+ with no reply -> status=expired,
+                                   mockup file removed from vet-demo-sites.
 ```
 
 **Why drafts instead of direct sending:** direct API sends triggered
 Gmail's "this message isn't authenticated" warning on the recipient side.
-Rather than chase that down further, 04 creates a Gmail draft and a human
-sends it from Gmail's own UI — sidesteps the question entirely, at the cost
-of losing full hands-off automation on this one step.
+Rather than chase that down further, both the initial pitch (04) and the
+day-3 nudge (05) create Gmail drafts and a human sends them from Gmail's
+own UI — sidesteps the question entirely, at the cost of losing full
+hands-off automation on those two steps specifically. Everything else
+(sourcing, qualifying, generating/publishing sites, detecting sends,
+polling/classifying replies, expiring stale leads) still runs unattended.
 
 Gate 1 (qualify -> site-gen) is automatic; gate 2 (site-gen -> outreach) is
 still a human review step — nothing emails a real business until you've

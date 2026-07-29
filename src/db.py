@@ -35,7 +35,7 @@ FIELDS = [
     "site_filename", "site_url", "site_generated_at",
     "contact_email",
     "draft_id", "email_message_id", "email_thread_id", "email_sent_at",
-    "followup_sent_at", "expire_at", "reply_classification",
+    "followup_draft_id", "followup_sent_at", "expire_at", "reply_classification",
     "last_reply_message_id", "claimed_at",
     "error", "created_at", "updated_at",
 ]

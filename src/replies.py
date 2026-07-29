@@ -1,21 +1,33 @@
 """
-Two jobs, both against threads created by outreach.py:
+Everything this pipeline puts in front of a real person goes through a
+human hitting send in Gmail's own UI — see outreach.py for why direct API
+sends were dropped. That means every step here that used to "just send"
+now creates a draft and waits to notice you've sent it. Four jobs, run
+together each pass:
 
-1. For 'draft_created' leads (outreach.py now creates a Gmail draft instead
-   of sending — see its module docstring for why): check whether a human
-   has actually hit send on it yet. Once they have, promote to 'emailed'
-   and start the day-3/7 clock from the REAL send time, not draft-creation
-   time — a draft can sit unsent for days and the clock shouldn't be
-   running during that time.
+1. 'draft_created' leads: outreach.py created the initial pitch as a Gmail
+   draft. Check whether you've sent it yet — once you have, promote to
+   'emailed' and start the day-3/7 clock from the REAL send time, not
+   draft-creation time (a draft can sit unsent for days).
 
-2. For 'emailed'/'followed_up' leads, poll for replies, classify with
-   Claude, and drive the day-3/day-7 timer:
-     - reply arrives at any point -> classify, status = replied_*, timer stops
-     - no reply by day 3-4 -> one automated nudge, status = followed_up
-     - no reply by day 7 -> status = expired, mockup file removed from
-       vet-demo-sites
+2. 'followup_draft_created' leads: same idea for the day-3 nudge draft
+   (see draft_followup() below) — once you've sent it, promote to
+   'followed_up'. Distinguishing "the nudge got sent" from "the original
+   email is still sitting there sent" needs care since both live in the
+   same Gmail thread — see mailer.get_new_sent_message()'s known_message_ids
+   parameter.
 
-Designed to run every few hours (see .github/workflows/05_poll_replies.yml)
+3. 'emailed' / 'followup_draft_created' / 'followed_up' leads: poll for a
+   reply, classify with Claude. Any terminal classification
+   (interested/not_interested/needs_info) stops the clock — status=replied_*.
+
+4. Timer-driven, off the ORIGINAL send time (email_sent_at), regardless of
+   whether the nudge draft has been sent yet: day 3+ with status still
+   'emailed' -> draft the day-3 nudge (does not send it). Day 7+ with no
+   reply, any of the three statuses above -> status=expired, mockup file
+   removed from vet-demo-sites.
+
+Designed to run every few hours (see .github/workflows/05_poll_replies_followup.yml)
 so a genuinely interested reply — or a draft you just sent — doesn't sit for
 a full day before anyone/anything reacts to it.
 """
@@ -55,16 +67,17 @@ def classify_reply(reply_text: str) -> dict:
 
 
 def check_draft_sent(lead: dict, dry_run: bool) -> None:
-    """Detects whether a human has sent the Gmail draft outreach.py created.
-    No-ops if it's still sitting unsent (or was deleted without ever being
-    sent — indistinguishable from "still drafting," and low-stakes either
-    way; it just stays in draft_created until manually cleaned up)."""
-    sent = mailer.get_sent_message_in_thread(lead["email_thread_id"])
+    """Detects whether a human has sent the initial-outreach Gmail draft
+    outreach.py created. No-ops if it's still sitting unsent (or was
+    deleted without ever being sent — indistinguishable from "still
+    drafting," and low-stakes either way; it just stays in draft_created
+    until manually cleaned up)."""
+    sent = mailer.get_new_sent_message(lead["email_thread_id"], known_message_ids=set())
     if not sent:
         return
 
     if dry_run:
-        print(f"    [DRY RUN] draft has been sent — would start the reply-tracking clock")
+        print("    [DRY RUN] draft has been sent — would start the reply-tracking clock")
         return
 
     internal_date_ms = sent.get("internal_date")
@@ -81,6 +94,34 @@ def check_draft_sent(lead: dict, dry_run: bool) -> None:
     })
     db.commit_and_push(f"replies: {lead['name']} ({lead['place_id']}) draft was sent, clock started")
     print(f"    -> draft sent at {sent_at.isoformat()}, day-{EXPIRE_AFTER_DAYS} clock started")
+
+
+def check_followup_draft_sent(lead: dict, dry_run: bool) -> None:
+    """Same idea as check_draft_sent, but for the day-3 nudge draft — and
+    the thread already contains one SENT message (the original outreach
+    email) by this point, so the original's message_id has to be excluded
+    or it'd look like the nudge was "sent" the instant the draft exists."""
+    known = {lead["email_message_id"]} if lead.get("email_message_id") else set()
+    sent = mailer.get_new_sent_message(lead["email_thread_id"], known_message_ids=known)
+    if not sent:
+        return
+
+    if dry_run:
+        print("    [DRY RUN] follow-up draft has been sent")
+        return
+
+    internal_date_ms = sent.get("internal_date")
+    sent_at = (
+        datetime.fromtimestamp(int(internal_date_ms) / 1000, tz=timezone.utc)
+        if internal_date_ms else datetime.now(timezone.utc)
+    )
+
+    db.update_lead(lead["place_id"], {
+        "status": "followed_up",
+        "followup_sent_at": sent_at.isoformat(),
+    })
+    db.commit_and_push(f"replies: {lead['name']} ({lead['place_id']}) follow-up draft was sent")
+    print(f"    -> follow-up sent at {sent_at.isoformat()}")
 
 
 TERMINAL_CLASSIFICATIONS = {"interested", "not_interested", "needs_info"}
@@ -125,9 +166,9 @@ def check_for_reply(lead: dict, dry_run: bool) -> bool:
     return classification in TERMINAL_CLASSIFICATIONS
 
 
-def send_followup(lead: dict, dry_run: bool) -> None:
+def draft_followup(lead: dict, dry_run: bool) -> None:
     if dry_run:
-        print(f"    [DRY RUN] would send day-{FOLLOWUP_AFTER_DAYS} nudge to {lead.get('contact_email')}")
+        print(f"    [DRY RUN] would draft day-{FOLLOWUP_AFTER_DAYS} nudge to {lead.get('contact_email')}")
         return
 
     body = (
@@ -135,17 +176,17 @@ def send_followup(lead: dict, dry_run: bool) -> None:
         f"Here's the mockup again: {lead['site_url']}\n\nNo pressure either way, "
         f"just didn't want it to get lost.\n\n- Steve"
     )
-    sent = mailer.send_followup(
+    draft = mailer.create_draft_reply(
         lead["contact_email"], f"Mockup for {lead['name']}", body, lead["email_thread_id"]
     )
     db.update_lead(lead["place_id"], {
-        "status": "followed_up",
-        "followup_sent_at": datetime.now(timezone.utc).isoformat(),
+        "status": "followup_draft_created",
+        "followup_draft_id": draft["draft_id"],
     })
-    # Per-send commit, same reasoning as outreach.py — don't risk a
-    # duplicate nudge if the process dies before the end-of-run commit.
-    db.commit_and_push(f"replies: sent follow-up to {lead['name']} ({lead['place_id']})")
-    print(f"    -> nudge sent, message {sent['message_id']}")
+    # Per-draft commit, same reasoning as outreach.py — don't risk creating
+    # a duplicate nudge draft if the process dies before the end-of-run commit.
+    db.commit_and_push(f"replies: drafted follow-up for {lead['name']} ({lead['place_id']})")
+    print(f"    -> follow-up draft created, {draft['draft_id']} — review and send from Gmail")
 
 
 def expire_lead(lead: dict, dry_run: bool) -> None:
@@ -162,7 +203,7 @@ def expire_lead(lead: dict, dry_run: bool) -> None:
             print(f"    [WARN] failed to unpublish {lead['site_filename']}: {e}")
 
     db.update_lead(lead["place_id"], {"status": "expired"})
-    print(f"    -> expired, mockup removed")
+    print("    -> expired, mockup removed")
 
 
 def process_lead(lead: dict, now: datetime, dry_run: bool) -> None:
@@ -175,10 +216,15 @@ def process_lead(lead: dict, now: datetime, dry_run: bool) -> None:
     sent_dt = datetime.fromisoformat(sent_at.replace("Z", "+00:00"))
     days_since_send = (now - sent_dt).days
 
-    if lead["status"] == "emailed" and days_since_send >= FOLLOWUP_AFTER_DAYS:
-        send_followup(lead, dry_run)
-    elif days_since_send >= EXPIRE_AFTER_DAYS:
+    # Timer is always relative to the ORIGINAL send, regardless of whether
+    # the day-3 nudge draft has been sent yet — expiry doesn't wait on you
+    # remembering to send the nudge.
+    if days_since_send >= EXPIRE_AFTER_DAYS:
         expire_lead(lead, dry_run)
+        return
+
+    if lead["status"] == "emailed" and days_since_send >= FOLLOWUP_AFTER_DAYS:
+        draft_followup(lead, dry_run)
 
 
 def main():
@@ -186,16 +232,32 @@ def main():
     dry_run = os.environ.get("DRY_RUN", "true").lower() != "false"
     now = datetime.now(timezone.utc)
 
-    drafts = db.get_leads("draft_created", limit=50)
-    print(f"Checking {len(drafts)} pending draft(s){' [DRY RUN]' if dry_run else ''}...")
-    for lead in drafts:
+    initial_drafts = db.get_leads("draft_created", limit=50)
+    print(f"Checking {len(initial_drafts)} pending initial draft(s){' [DRY RUN]' if dry_run else ''}...")
+    for lead in initial_drafts:
         print(f"  {lead['name']} ({lead['place_id']})")
         try:
             check_draft_sent(lead, dry_run)
         except Exception as e:
             print(f"    [ERROR] {e}")
 
-    leads = db.get_leads("emailed", limit=50) + db.get_leads("followed_up", limit=50)
+    followup_drafts = db.get_leads("followup_draft_created", limit=50)
+    print(f"Checking {len(followup_drafts)} pending follow-up draft(s){' [DRY RUN]' if dry_run else ''}...")
+    for lead in followup_drafts:
+        print(f"  {lead['name']} ({lead['place_id']})")
+        try:
+            check_followup_draft_sent(lead, dry_run)
+        except Exception as e:
+            print(f"    [ERROR] {e}")
+
+    # Re-fetch: some leads above may have just been promoted this run
+    # (draft_created->emailed, followup_draft_created->followed_up) — pull
+    # fresh so reply/expiry checks see their current status, not stale.
+    leads = (
+        db.get_leads("emailed", limit=50)
+        + db.get_leads("followup_draft_created", limit=50)
+        + db.get_leads("followed_up", limit=50)
+    )
     print(f"Checking {len(leads)} outstanding lead(s){' [DRY RUN]' if dry_run else ''}...")
 
     for lead in leads:
@@ -205,7 +267,8 @@ def main():
         except Exception as e:
             print(f"    [ERROR] {e}")
 
-    db.commit_and_push(f"replies: {len(drafts) + len(leads)} lead(s) checked")
+    total = len(initial_drafts) + len(followup_drafts) + len(leads)
+    db.commit_and_push(f"replies: {total} lead(s) checked")
     print("Done.")
 
 
