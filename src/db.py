@@ -34,7 +34,7 @@ FIELDS = [
     "approved_for_site", "approved_for_outreach",
     "site_filename", "site_url", "site_generated_at",
     "contact_email",
-    "email_message_id", "email_thread_id", "email_sent_at",
+    "draft_id", "email_message_id", "email_thread_id", "email_sent_at",
     "followup_sent_at", "expire_at", "reply_classification",
     "last_reply_message_id", "claimed_at",
     "error", "created_at", "updated_at",

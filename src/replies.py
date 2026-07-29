@@ -1,14 +1,23 @@
 """
-Polls Gmail threads for leads in 'emailed'/'followed_up' status, classifies
-any new reply with Claude, and drives the day-3/day-7 timer:
-  - reply arrives at any point -> classify, status = replied_*, timer stops
-  - no reply by day 3-4 -> one automated nudge, status = followed_up
-  - no reply by day 7 -> status = expired, mockup file removed from
-    vet-demo-sites
+Two jobs, both against threads created by outreach.py:
+
+1. For 'draft_created' leads (outreach.py now creates a Gmail draft instead
+   of sending — see its module docstring for why): check whether a human
+   has actually hit send on it yet. Once they have, promote to 'emailed'
+   and start the day-3/7 clock from the REAL send time, not draft-creation
+   time — a draft can sit unsent for days and the clock shouldn't be
+   running during that time.
+
+2. For 'emailed'/'followed_up' leads, poll for replies, classify with
+   Claude, and drive the day-3/day-7 timer:
+     - reply arrives at any point -> classify, status = replied_*, timer stops
+     - no reply by day 3-4 -> one automated nudge, status = followed_up
+     - no reply by day 7 -> status = expired, mockup file removed from
+       vet-demo-sites
 
 Designed to run every few hours (see .github/workflows/05_poll_replies.yml)
-so a genuinely interested reply doesn't sit for a full day before anyone/
-anything reacts to it.
+so a genuinely interested reply — or a draft you just sent — doesn't sit for
+a full day before anyone/anything reacts to it.
 """
 
 import json
@@ -43,6 +52,35 @@ def classify_reply(reply_text: str) -> dict:
         return json.loads(text)
     except json.JSONDecodeError:
         return {"classification": "unclear", "reason": "Claude response unparseable"}
+
+
+def check_draft_sent(lead: dict, dry_run: bool) -> None:
+    """Detects whether a human has sent the Gmail draft outreach.py created.
+    No-ops if it's still sitting unsent (or was deleted without ever being
+    sent — indistinguishable from "still drafting," and low-stakes either
+    way; it just stays in draft_created until manually cleaned up)."""
+    sent = mailer.get_sent_message_in_thread(lead["email_thread_id"])
+    if not sent:
+        return
+
+    if dry_run:
+        print(f"    [DRY RUN] draft has been sent — would start the reply-tracking clock")
+        return
+
+    internal_date_ms = sent.get("internal_date")
+    sent_at = (
+        datetime.fromtimestamp(int(internal_date_ms) / 1000, tz=timezone.utc)
+        if internal_date_ms else datetime.now(timezone.utc)
+    )
+
+    db.update_lead(lead["place_id"], {
+        "status": "emailed",
+        "email_message_id": sent["message_id"],
+        "email_sent_at": sent_at.isoformat(),
+        "expire_at": (sent_at + timedelta(days=EXPIRE_AFTER_DAYS)).isoformat(),
+    })
+    db.commit_and_push(f"replies: {lead['name']} ({lead['place_id']}) draft was sent, clock started")
+    print(f"    -> draft sent at {sent_at.isoformat()}, day-{EXPIRE_AFTER_DAYS} clock started")
 
 
 TERMINAL_CLASSIFICATIONS = {"interested", "not_interested", "needs_info"}
@@ -148,6 +186,15 @@ def main():
     dry_run = os.environ.get("DRY_RUN", "true").lower() != "false"
     now = datetime.now(timezone.utc)
 
+    drafts = db.get_leads("draft_created", limit=50)
+    print(f"Checking {len(drafts)} pending draft(s){' [DRY RUN]' if dry_run else ''}...")
+    for lead in drafts:
+        print(f"  {lead['name']} ({lead['place_id']})")
+        try:
+            check_draft_sent(lead, dry_run)
+        except Exception as e:
+            print(f"    [ERROR] {e}")
+
     leads = db.get_leads("emailed", limit=50) + db.get_leads("followed_up", limit=50)
     print(f"Checking {len(leads)} outstanding lead(s){' [DRY RUN]' if dry_run else ''}...")
 
@@ -158,7 +205,7 @@ def main():
         except Exception as e:
             print(f"    [ERROR] {e}")
 
-    db.commit_and_push(f"replies: {len(leads)} lead(s) checked")
+    db.commit_and_push(f"replies: {len(drafts) + len(leads)} lead(s) checked")
     print("Done.")
 
 

@@ -21,6 +21,7 @@ from email.mime.text import MIMEText
 
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
 
@@ -64,6 +65,48 @@ def send_email(to: str, subject: str, body_text: str) -> dict:
 
     result = get_service().users().messages().send(userId="me", body={"raw": raw}).execute()
     return {"message_id": result["id"], "thread_id": result["threadId"]}
+
+
+def create_draft(to: str, subject: str, body_text: str) -> dict:
+    """Creates a draft in the authenticated account's own Drafts folder
+    instead of sending — a human reviews and hits send themselves from
+    within Gmail. Returns {'draft_id', 'message_id', 'thread_id'}."""
+    message = MIMEText(body_text)
+    message["to"] = to
+    message["from"] = get_sender_address()
+    message["subject"] = subject
+    raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
+
+    result = get_service().users().drafts().create(
+        userId="me", body={"message": {"raw": raw}}
+    ).execute()
+    return {
+        "draft_id": result["id"],
+        "message_id": result["message"]["id"],
+        "thread_id": result["message"]["threadId"],
+    }
+
+
+def get_sent_message_in_thread(thread_id: str) -> dict | None:
+    """Call this later to detect whether a human has actually hit send on a
+    draft created by create_draft(). Returns {'message_id', 'internal_date'}
+    for the first message in the thread carrying Gmail's SENT label once
+    one exists, else None — still sitting as an unsent draft, or the draft
+    was deleted without ever being sent (thread/draft gone entirely, 404)."""
+    try:
+        thread = get_service().users().threads().get(
+            userId="me", id=thread_id, format="metadata"
+        ).execute()
+    except HttpError as e:
+        if e.resp.status == 404:
+            return None
+        raise
+
+    for msg in thread.get("messages", []):
+        if "SENT" in msg.get("labelIds", []):
+            return {"message_id": msg["id"], "internal_date": msg.get("internalDate")}
+
+    return None
 
 
 def send_followup(to: str, subject: str, body_text: str, thread_id: str) -> dict:

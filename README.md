@@ -42,18 +42,31 @@ name/phone/address/reviews, and a mockup hosted as a static page.
    <<< GATE 2 — human: open the live preview URL, flip approved_for_outreach
        to TRUE in data/leads.csv if it's good enough to send >>>
 
-04_send_outreach        (weekdays) Claude drafts a short personal email,
-                                   sent via Gmail API (real inbox, threaded).
-                                   status=emailed, 7-day clock starts.
-                                   Skips leads with no contact_email on file.
+04_send_outreach        (weekdays) Claude drafts a short personal email and
+                                   creates it as a Gmail DRAFT (not sent) —
+                                   status=draft_created. Skips leads with no
+                                   contact_email on file. You review it in
+                                   Gmail and hit send yourself.
 
-05_poll_replies_followup (4hrly)  Polls the Gmail thread. Reply arrives ->
-                                   Claude classifies interested/not/needs_info,
-                                   status=replied_*. No reply by day 3 -> one
-                                   automated nudge (status=followed_up). No
-                                   reply by day 7 -> status=expired, mockup
-                                   file removed from vet-demo-sites.
+05_poll_replies_followup (4hrly)  Two things: (a) checks draft_created leads
+                                   for whether you've actually sent the draft
+                                   yet — once you have, status=emailed and the
+                                   7-day clock starts from the real send time,
+                                   not when it was drafted; (b) for
+                                   emailed/followed_up leads, polls the Gmail
+                                   thread — reply arrives -> Claude classifies
+                                   interested/not/needs_info, status=replied_*.
+                                   No reply by day 3 -> one automated nudge
+                                   (status=followed_up). No reply by day 7 ->
+                                   status=expired, mockup file removed from
+                                   vet-demo-sites.
 ```
+
+**Why drafts instead of direct sending:** direct API sends triggered
+Gmail's "this message isn't authenticated" warning on the recipient side.
+Rather than chase that down further, 04 creates a Gmail draft and a human
+sends it from Gmail's own UI — sidesteps the question entirely, at the cost
+of losing full hands-off automation on this one step.
 
 Gate 1 (qualify -> site-gen) is automatic; gate 2 (site-gen -> outreach) is
 still a human review step — nothing emails a real business until you've
@@ -131,10 +144,14 @@ preview URL you've checked and want to actually email.
 5. Set `approved_for_outreach` to `True` in `data/leads.csv` for the rows
    whose preview you've reviewed and are happy with.
 6. `workflow_dispatch` → **04 Send Outreach** with `DRY_RUN` unset, read the
-   drafted email. When ready, set `DRY_RUN=false` and send a small first
-   batch (~5 leads) — not the full cron.
-7. Watch **05 Poll Replies + Follow-up** across a full 7-day cycle for that
-   batch before enabling the schedules on 03/04/05 for real.
+   drafted email copy in the logs. When ready, set `DRY_RUN=false` for a
+   small first batch (~5 leads) — this creates real Gmail drafts, doesn't
+   send anything yet. Open your Gmail Drafts folder, review each one, and
+   hit send yourself.
+7. Run **05 Poll Replies + Follow-up** (or wait for its 4-hourly schedule)
+   after sending a draft — it should pick up the real send time and start
+   the 7-day clock. Watch a full cycle for that batch before enabling the
+   schedules on 03/04/05 for real.
 8. Only once all of the above has been exercised successfully, remove the
    `workflow_dispatch`-only caution and let the cron schedules run unattended.
 

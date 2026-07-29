@@ -1,20 +1,28 @@
 """
-Drafts and sends the cold outreach email for site_generated leads that have
-cleared the second human approval gate (approved_for_outreach). Gated behind
-DRY_RUN — with DRY_RUN=true this drafts and logs the email but never calls
-the Gmail API.
+Drafts the cold outreach email for site_generated leads that have cleared
+the second human approval gate (approved_for_outreach), and creates it as a
+Gmail draft rather than sending it directly — a human reviews and hits send
+themselves from within Gmail. Gated behind DRY_RUN — with DRY_RUN=true this
+drafts the copy and logs it but never calls the Gmail API at all.
+
+Sending directly through the API previously triggered Gmail's "this message
+isn't authenticated" warning on the recipient end for reasons that turned
+out not to be fixable from this codebase (see mailer.py's history) — having
+a human actually hit send from Gmail's own UI sidesteps that entirely, at
+the cost of losing full hands-off automation on this one step. See
+replies.py for how the day-3/7 reply-tracking clock picks up once a draft
+is actually sent, rather than when it was drafted.
 
 Unlike the other pipeline scripts, this one commits+pushes data/leads.csv
-after EVERY successful send, not once at the end of the batch. A crash after
-Gmail confirms a send but before that status lands in git would otherwise
-mean the next run has no record the email went out — and would send it
-again. Committing per-send bounds that risk to "at most one in-flight send"
-instead of the whole batch.
+after EVERY successful draft creation, not once at the end of the batch. A
+crash after Gmail confirms the draft exists but before that status lands in
+git would otherwise mean the next run has no record of it and creates a
+duplicate draft. Committing per-draft bounds that risk to "at most one
+in-flight draft" instead of the whole batch.
 """
 
 import os
 import time
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import anthropic
@@ -25,8 +33,6 @@ PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "email_draft_prompt.md"
 EMAIL_PROMPT = PROMPT_PATH.read_text()
 
 MODEL = "claude-opus-4-6"
-FOLLOWUP_DAYS = 4
-EXPIRE_DAYS = 7
 
 client = anthropic.Anthropic()
 
@@ -64,7 +70,7 @@ def main():
     batch_size = int(os.environ.get("OUTREACH_BATCH_SIZE", "10"))
 
     leads = db.get_leads("site_generated", limit=batch_size, approved_for_outreach=True)
-    print(f"Sending outreach for {len(leads)} lead(s){' [DRY RUN]' if dry_run else ''}...")
+    print(f"Drafting outreach for {len(leads)} lead(s){' [DRY RUN]' if dry_run else ''}...")
 
     for lead in leads:
         print(f"  {lead['name']} ({lead['place_id']})")
@@ -78,21 +84,19 @@ def main():
             subject = f"Built you a mockup of a new {lead['name']} site"
 
             if dry_run:
-                print(f"    [DRY RUN] would email {to_email}:\n{body}\n")
+                print(f"    [DRY RUN] would draft to {to_email}:\n{body}\n")
                 continue
 
-            sent = mailer.send_email(to_email, subject, body)
-            now = datetime.now(timezone.utc)
+            draft = mailer.create_draft(to_email, subject, body)
 
             db.update_lead(lead["place_id"], {
-                "status": "emailed",
-                "email_message_id": sent["message_id"],
-                "email_thread_id": sent["thread_id"],
-                "email_sent_at": now.isoformat(),
-                "expire_at": (now + timedelta(days=EXPIRE_DAYS)).isoformat(),
+                "status": "draft_created",
+                "draft_id": draft["draft_id"],
+                "email_message_id": draft["message_id"],
+                "email_thread_id": draft["thread_id"],
             })
-            db.commit_and_push(f"outreach: emailed {lead['name']} ({lead['place_id']})")
-            print(f"    -> sent, thread {sent['thread_id']}")
+            db.commit_and_push(f"outreach: drafted email for {lead['name']} ({lead['place_id']})")
+            print(f"    -> draft created, {draft['draft_id']} — review and send from Gmail")
         except Exception as e:
             db.update_lead(lead["place_id"], {"error": str(e)})
             print(f"    [ERROR] {e}")
